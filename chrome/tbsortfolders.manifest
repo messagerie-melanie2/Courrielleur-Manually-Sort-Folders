@@ -1,0 +1,2 @@
+content tbsortfolders tbsortfolders/content/tbsortfolders/
+overlay chrome://messenger/content/messenger.xul chrome://tbsortfolders/content/overlay.xul 

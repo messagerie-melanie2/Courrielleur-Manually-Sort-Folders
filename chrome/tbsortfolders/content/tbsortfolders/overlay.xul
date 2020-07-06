@@ -1,0 +1,15 @@
+<?xml version="1.0"?>
+<!DOCTYPE window SYSTEM "chrome://tbsortfolders/locale/main.dtd">
+<overlay id="messengerWindow" xmlns="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul">
+  <script type="application/x-javascript" src="chrome://tbsortfolders/content/folderPane.js" />
+  <!--
+  <menu id="tasksMenu" >
+    <menupopup id="taskPopup">
+      <menuitem insertafter="appmenu_btAgenda" id="tbsf_menu_item"
+        oncommand="window.openDialog('chrome://tbsortfolders/content/', '',
+          'chrome=yes, modal=yes, dialog=no, resizable=yes');"
+        label="&tbsf.menuentry.label;" />
+    </menupopup>
+  </menu>
+  -->
+</overlay>
