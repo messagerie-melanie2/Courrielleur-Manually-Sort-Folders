@@ -4,24 +4,26 @@ const Cu = Components.utils;
 Cu.import("resource://tbsortfolders/modules/tbsortfolders-sort.jsm");
 Cu.import("resource:///modules/MailUtils.js");
 Cu.import("resource:///modules/iteratorUtils.jsm"); // for fixIterator
-Cu.import("resource://gre/modules/Services.jsm");
+Cu.import("resource:///modules/Services.jsm");
 
 var g_accounts = Object();
-
+//const tbsf_prefs = Application.extensions.get("tbsortfolders@xulforum.org").prefs;
 var tbsf_prefs=Services.prefs.getBranch("extensions.tbsortfolders@xulforum.org.");
 var tbsf_data = {};
 var current_account = null;
 
 function setStringPref(p, v) {
-
-  return tbsf_prefs.setStringPref(p, v);
+  let str = Cc["@mozilla.org/supports-string;1"]
+            .createInstance(Ci.nsISupportsString);
+  str.data = v;
+  return tbsf_prefs.setComplexValue(p, Ci.nsISupportsString, str);
 }
 
 /* Most of the functions below are for *folder* sorting */
 
 function assert(v, s) {
   if (!v) {
-    Services.console.logStringMessage("Assertion failure "+s);
+    Application.console.log("Assertion failure "+s);
     throw "Assertion failure";
   }
 }
@@ -33,83 +35,128 @@ function dump_tree(node, prefix) {
     dump_tree(node.children[i], prefix+" ");
 }
 
-function item_key(ftv_item) {
-
-  return ftv_item._folder.URI;
+function item_key(tree_item) {
+  //return tree_item.querySelector("treerow > treecell").getAttribute("value");
+  for (let i = 0; i < tree_item.children.length; ++i)
+    if (tree_item.children[i].tagName == "treerow")
+      return tree_item.children[i].firstChild.getAttribute("value");
+  Application.console.log("TBSortFolders: severe error, no item key for "+tree_item+"\n");
 }
 
-function item_label(ftv_item) {
-
-  return ftv_item._folder.name;
+function item_label(tree_item) {
+  //return tree_item.querySelector("treerow > treecell").getAttribute("label");
+  for (let i = 0; i < tree_item.children.length; ++i)
+    if (tree_item.children[i].tagName == "treerow")
+      return tree_item.children[i].firstChild.getAttribute("label");
+  Application.console.log("TBSortFolders: severe error, no item label for "+tree_item+"\n");
 }
 
+let rdfService = Cc['@mozilla.org/rdf/rdf-service;1'].getService(Ci.nsIRDFService);
 let ftvItems = {};
 
 function rebuild_tree(full, collapse) {
-
-  //dump("rebuild_tree("+full+");\n");
+  dump("rebuild_tree("+full+");\n");
   let dfs = 0;
   /* Cache these expensive calls. They're called for each comparison :( */
-  let myFtvItem = function(ftvitem) {
-
-    if (!ftvItems[ftvitem._folder.URI]) {
-      ftvItems[ftvitem._folder.URI] = { _folder: ftvitem._folder, text: ftvitem._folder.name };
+  let myFtvItem = function(tree_item) {
+    if (!ftvItems[tree_item.id]) {
+      let text = item_label(tree_item);
+      let folder = rdfService.GetResource(tree_item.id);
+      folder.QueryInterface(Ci.nsIMsgFolder);
+      ftvItems[tree_item.id] = { _folder: folder, text: text };
     }
-    return ftvItems[ftvitem._folder.URI];
+    return ftvItems[tree_item.id];
   }
   let sort_function;
   let replace_data = false;
   let sort_method = tbsf_data[current_account][0];
-
   if (sort_method == 0) {
-      //dump("0\n");
-      sort_function = (c1, c2) => tbsf_sort_functions[0](myFtvItem(c1), myFtvItem(c2));
+      dump("0\n");
+      sort_function = function (c1, c2) tbsf_sort_functions[0](myFtvItem(c1), myFtvItem(c2));
   } else if (sort_method == 1) {
-      //dump("1\n");
-      sort_function = (c1, c2) => tbsf_sort_functions[1](myFtvItem(c1), myFtvItem(c2));
+      dump("1\n");
+      sort_function = function (c1, c2) tbsf_sort_functions[1](myFtvItem(c1), myFtvItem(c2));
   } else if (sort_method == 2) {
-      //dump("2\n");
-      sort_function =
-        (c1, c2) => tbsf_sort_functions[2](tbsf_data[current_account][1], myFtvItem(c1), myFtvItem(c2));
+      dump("2\n");
+      sort_function = 
+        function (c1, c2) tbsf_sort_functions[2](tbsf_data[current_account][1], myFtvItem(c1), myFtvItem(c2));
       replace_data = true;
   }
   let fresh_data = {};
-  let my_sort = function(a_ftv_items, indent) {
-    let ftv_items = Array();
+  let my_sort = function(a_tree_items, indent) {
+    let tree_items = Array();
+    //tree_items = a_tree_items;
 
-    for (let i = 0; i < a_ftv_items.length; ++i)
-      ftv_items.push(a_ftv_items[i]);
-    ftv_items.sort(sort_function);
+    dump(indent+a_tree_items.length+" nodes passed\n");
+    for (let i = 0; i < a_tree_items.length; ++i)
+      tree_items.push(a_tree_items[i]);
+    tree_items.sort(sort_function);
 
-
-    for (let i = 0; i < ftv_items.length; ++i) {
+    dump(indent+tree_items.length+" folders to examine\n");
+    for (let i = 0; i < tree_items.length; ++i) {
       dfs++;
+      //let data = tbsf_data[current_account][1];
+      /*if (data[item_key(tree_items[i])] !== undefined)
+        assert(data[item_key(tree_items[i])] == dfs, "dfs "+dfs+" data "+data[item_key(tree_items[i])]);
+      else*/
+      /* We need to do this: in case a folder has been deleted in the middle of
+      the DFS, the sort keys are not contiguous anymore. However, we wish to
+      maintain the invariant that is commented out above (the assert). The
+      invariant above (the assert) is broken if a folder has been deleted in the
+      meanwhile so we make sure it is enforced with the line below. It only
+      changes something in case a folder has been deleted/added since we last
+      walked the folder tree.
+      
+      It is to be remarked that when a folder has been added, it is sorted
+      \emph{at the end} of the list (see special case and comments in
+      folderPane.js) so the test above gives true (it's undefined) and we set
+      the right sort keys. */
+      fresh_data[item_key(tree_items[i])] = dfs;
+      if (full)
+        dump(indent+"### Rebuilding "+dfs+" is "+item_key(tree_items[i])+"\n");
 
-      fresh_data[item_key(ftv_items[i])] = dfs;
-
+      //let n_tree_items = tree_items[i].querySelectorAll("[thisnode] > treechildren > treeitem");
+      let n_tree_items = [];
+      for (let j = 0; j < tree_items[i].children.length; ++j)
+        if (tree_items[i].children[j].tagName == "treechildren")
+          n_tree_items = tree_items[i].children[j].children;
+      if (n_tree_items.length) {
+        my_sort(n_tree_items, indent+" ");
+        if (collapse
+            && tree_items[i].getAttribute("container") == "true"
+            && tree_items[i].getAttribute("open") == "true")
+          tree_items[i].setAttribute("open", "false");
+      }
     }
 
-    gListeDossiers.load(ftv_items);
+    if (full) {
+      //dummy, slow insertion algorithm (but only used when the folder list is
+      //initially built)
+      for (let i = 0; i < tree_items.length; ++i)
+        tree_items[i].parentNode.appendChild(tree_items[i].parentNode.removeChild(tree_items[i]));
+    } else {
+      //cleverer one: we know we're only swapping two items
+      let i = 0;
+      while (i < tree_items.length && tree_items[0].parentNode.children[i] == tree_items[i])
+        i++;
+      //we found a difference between what we want and the state of the UI: swap
+      //current item with the next
+      if (i < tree_items.length - 1) {
+        let parent = tree_items[0].parentNode;
+        parent.insertBefore(parent.removeChild(parent.children[i+1]), parent.children[i]);
+      }
+    }
   }
 
-  if (null==gListeDossiers.dossiers){
-
-    let account = g_accounts[current_account];
-
-    gListeDossiers.initListeDossiers(account);
-  }
-
-  my_sort(gListeDossiers.dossiers, "");
-
+  let children = document.querySelectorAll("#foldersTree > treechildren > treeitem");
+  my_sort(children, "");
   if (replace_data)
     tbsf_data[current_account][1] = fresh_data; //this "fresh" array allows us to get rid of old folder's keys
 
 }
 
 function on_load() {
-
-  let json = tbsf_prefs.getStringPref("tbsf_data");
-
+  let json = tbsf_prefs.getComplexValue("tbsf_data", Ci.nsISupportsString).data;
   try {
     tbsf_data = JSON.parse(json);
   } catch (e) {
@@ -118,21 +165,19 @@ function on_load() {
   let account_manager = Cc["@mozilla.org/messenger/account-manager;1"].getService(Ci.nsIMsgAccountManager);
   let name;
   let accounts_menu = document.getElementById("accounts_menu");
-  let accounts = [];
-  for (let x of fixIterator(account_manager.accounts, Ci.nsIMsgAccount))
-    accounts.push(x);
+  let accounts = [x for each (x in fixIterator(account_manager.accounts, Ci.nsIMsgAccount))];
   if (!accounts.length) {
     document.querySelector("tabbox").style.display = "none";
     document.getElementById("err_no_accounts").style.display = "";
     return;
   }
-  for (let account of accounts) {
-    //dump(Object.keys(account)+"\n");
+  for each (let account in accounts) {
+    dump(Object.keys(account)+"\n");
     //fill the menulist with the right elements
     if (!account.incomingServer)
       continue;
-    //dump(account.incomingServer.rootFolder.name+"\n");
-    name = account.incomingServer.rootFolder.name;
+    dump(account.incomingServer.rootFolder.prettiestName+"\n");
+    name = account.incomingServer.rootFolder.prettiestName;
     let it = document.createElement("menuitem");
     it.setAttribute("label", name);
     accounts_menu.appendChild(it);
@@ -142,8 +187,34 @@ function on_load() {
     g_accounts[name] = account;
     if (!tbsf_data[name]) tbsf_data[name] = Array();
   }
-
   document.getElementById("accounts_menu").parentNode.setAttribute("label", name);
+
+  /* That one is actually triggered once (after the template is built on load) */
+  let folders_tree = document.getElementById("foldersTree");
+  let some_listener = {
+    willRebuild : function(builder) { },
+    didRebuild : function(builder) { dump("Tree rebuilt\n"); rebuild_tree(true); }
+  };
+  folders_tree.builder.addListener(some_listener);
+  window.addEventListener("unload", function () { folders_tree.builder.removeListener(some_listener); }, false);
+
+  /* That one tracks changes that happen to the folder pane *while* the manually
+   * sort folders dialog is open */
+  /*let rdf_source = Components.classes["@mozilla.org/rdf/datasource;1?name=mailnewsfolders"].
+    getService(Components.interfaces.nsIRDFDataSource);
+  let some_observer = {
+    onAssert: function () {},
+    onBeginUpdateBatch: function () {},
+    onEndUpdateBatch: function () {},
+    onChange: function () {
+      dump("*** rdf:mailnewsfolders changed, rebuilding tree...\n");
+      rebuild_tree(true);
+    },
+    onMove: function () {},
+    onUnassert: function () {}
+  };
+  rdf_source.AddObserver(some_observer);
+  window.addEventListener("unload", function () { dump("Removed observer\n"); rdf_source.RemoveObserver(some_observer); }, false);*/
 
   on_account_changed();
 
@@ -151,64 +222,58 @@ function on_load() {
   extra_on_load();
 }
 
-function renumber(folder, start) {
+function renumber(treeItem, start) {
+  tbsf_data[current_account][1][item_key(treeItem)] = start++;
+  let children = []; // = treeItem.querySelectorAll("treechildren > treeitem"); but only starting from the root
+  for (let j = 0; j < treeItem.children.length; ++j)
+    if (treeItem.children[j].tagName == "treechildren")
+      children = treeItem.children[j].children;
 
-  tbsf_data[current_account][1][folder.URI] = start++;
-
-  let children = folder.children;
-
-  if (folder.hasSubFolders){
-    var subFolders=folder.subFolders;
-    while (subFolders.hasMoreElements()) {
-      var suivant=subFolders.getNext().QueryInterface(Components.interfaces.nsIMsgFolder);
-      start = renumber(suivant, start);
-    }
-  }
-
+  for (let i = 0; i < children.length; ++i)
+    start = renumber(children[i], start);
   return start;
 }
 
-function move_up(folder) {
-
-  let uri = folder.URI;
-  let index=gFolderTreeView.getIndexOfFolder(folder);
-  if (0 < index) {
-    let previous_item = gFolderTreeView.getFolderForIndex(index-1);
-    let previous_uri = previous_item.URI;
+function move_up(tree_item) {
+  let tree = document.getElementById("foldersTree");
+  let uri = item_key(tree_item);
+  //dump(uri+"\n");
+  if (tree_item.previousSibling) {
+    let previous_item = tree_item.previousSibling;
+    let previous_uri = item_key(previous_item);
     let data = tbsf_data[current_account][1];
-    renumber(previous_item, renumber(folder, data[previous_uri]));
+    renumber(previous_item, renumber(tree_item, data[previous_uri]));
     rebuild_tree();
+    //tree.builder.rebuild();
   } else {
-    //dump("This is unexpected\n");
+    dump("This is unexpected\n");
   }
+  /*for (let i = 0; i < 10; ++i) {
+    let tree_item = tree.view.getItemAtIndex(i);
+    let k = item_key(tree_item);
+    dump(tbsf_data[current_account][1][k]+" ");
+  } dump("\n");*/
 }
 
 function on_move_up() {
-
   let tree = document.getElementById("foldersTree");
-  let i = tree.view.selection.currentIndex;
-  if (i < 0)
-    return;
-  let folder = gFolderTreeView.getFolderForIndex(i);
-
-  if (0 < i) {
-    move_up(folder);
-    tree.view.selection.select(gFolderTreeView.getIndexOfFolder(folder));
+  let i = tree.currentIndex;
+  if (i < 0) return;
+  let tree_item = tree.view.getItemAtIndex(tree.currentIndex);
+  if (tree_item.previousSibling) {
+    move_up(tree_item);
+    tree.view.selection.select(tree.view.getIndexOfItem(tree_item));
   }
 }
 
 function on_move_down() {
-
   let tree = document.getElementById("foldersTree");
-  let i = tree.view.selection.currentIndex;
-  if (i < 0)
-    return;
-  let folder = gFolderTreeView.getFolderForIndex(i);
-  let nb=gListeDossiers.dossiers.length;
-  if (nb > i+1) {
-    let next=gFolderTreeView.getFolderForIndex(i+1);
-    move_up(next);
-    tree.view.selection.select(gFolderTreeView.getIndexOfFolder(folder));
+  let i = tree.currentIndex;
+  if (i < 0) return;
+  let tree_item = tree.view.getItemAtIndex(tree.currentIndex);
+  if (tree_item.nextSibling) {
+    move_up(tree_item.nextSibling);
+    tree.view.selection.select(tree.view.getIndexOfItem(tree_item));
   }
 }
 
@@ -220,8 +285,10 @@ function get_sort_method_for_account(account) {
 }
 
 function update_tree() {
-
-  gListeDossiers.dossiers=null;
+  let account = g_accounts[current_account];
+  let root_folder = account.incomingServer.rootFolder; // nsIMsgFolder
+  let tree = document.getElementById("foldersTree");
+  tree.setAttribute("ref", root_folder.URI);
 }
 
 function on_account_changed() {
@@ -280,23 +347,22 @@ window.addEventListener("unload", on_refresh, false);
 var g_other_accounts = null;
 
 function accounts_on_load() {
-
-  let accounts = Services.prefs.getCharPref("mail.accountmanager.accounts").split(",");
-  let defaultaccount = Services.prefs.getCharPref("mail.accountmanager.defaultaccount");
-  accounts = accounts.filter((x) => x != defaultaccount);
+  let accounts = Application.prefs.get("mail.accountmanager.accounts").value.split(",");
+  let defaultaccount = Application.prefs.get("mail.accountmanager.defaultaccount").value;
+  accounts = accounts.filter(function (x) x != defaultaccount);
   accounts = [defaultaccount].concat(accounts);
-  let servers = accounts.map(function (a) { return Services.prefs.getCharPref("mail.account."+a+".server");});
-  let types = servers.map(function (s) { return Services.prefs.getCharPref("mail.server."+s+".type");});
+  let servers = accounts.map(function (a) Application.prefs.get("mail.account."+a+".server").value);
+  let types = servers.map(function (s) Application.prefs.get("mail.server."+s+".type").value);
   let names = servers.map(function (s) {
     try {
-      return Services.prefs.getStringPref("mail.server."+s+".name");
+      return Application.prefs.get("mail.server."+s+".name").value;
     } catch (e) {
-      return Services.prefs.getCharPref("mail.server."+s+".hostname");
+      return Application.prefs.get("mail.server."+s+".hostname").value;
     } });
   // mantis 4333
   let hiddensrv=servers.map(function (s) {
     try {
-      return Services.prefs.getBoolPref("mail.server."+s+".hidden");
+      return Application.prefs.get("mail.server."+s+".hidden").value;
     } catch (e) {
       return false;
     } });
@@ -344,7 +410,7 @@ function accounts_on_load() {
       default:
         let hidden = false;
         try {
-          let hidden_pref = Services.prefs.getBoolPref("mail.server."+servers[i]+".hidden");
+          let hidden_pref = Application.prefs.get("mail.server."+servers[i]+".hidden").value;
           hidden = hidden_pref;
         } catch (e) {
         }
@@ -386,14 +452,14 @@ function update_accounts_prefs() {
     new_pref = new_pref ? (new_pref + "," + child.value) : child.value;
   }
 
-  let pref = Services.prefs.getCharPref("mail.accountmanager.accounts");
+  let pref = Application.prefs.get("mail.accountmanager.accounts");
   pref.value = new_pref;
 
   let default_account = document.getElementById("default_account").parentNode.value;
   if (default_account == "-1")
-    Services.prefs.setCharPref("mail.accountmanager.defaultaccount") = first_mail_account;
+    Application.prefs.get("mail.accountmanager.defaultaccount").value = first_mail_account;
   else
-    Services.prefs.setCharPref("mail.accountmanager.defaultaccount") = default_account;
+    Application.prefs.get("mail.accountmanager.defaultaccount").value = default_account;
 }
 
 function account_move_up(index, listbox) {
@@ -439,7 +505,7 @@ function on_account_restart() {
   let mainWindow = Cc['@mozilla.org/appshell/window-mediator;1']
     .getService(Ci.nsIWindowMediator)
     .getMostRecentWindow("mail:3pane");
-  Services.startup.quit(Services.startup.eForceQuit | Services.startup.eRestart);
+  mainWindow.setTimeout(function () { mainWindow.Application.restart(); }, 1000);
   window.close();
 }
 
@@ -465,8 +531,7 @@ function on_pick_folder(aEvent) {
 }
 
 function extra_on_load() {
-
-  let startup_folder = tbsf_prefs.getStringPref("startup_folder");
+  let startup_folder = tbsf_prefs.getComplexValue("startup_folder", Ci.nsISupportsString).data;
   let picker = document.getElementById("startupFolder");
   let folder;
   if (startup_folder)
@@ -491,46 +556,5 @@ function on_startup_folder_method_changed(event) {
   } else {
     picker.disabled = true;
     setStringPref("startup_folder", "");
-  }
-}
-
-
-
-var gListeDossiers={
-
-  _treeElement: null,
-
-  generateMap: function(ftv) {
-
-    return this.dossiers;
-  },
-
-  //liste des dossiers du serveur
-  dossiers: null,
-
-  load: function(ftv_items) {
-
-    this.dossiers=ftv_items;
-
-    gFolderTreeView._rebuild();
-  },
-
-  initListeDossiers: function(compte) {
-
-    this.dossiers=[];
-    let serveur=compte.incomingServer;
-
-    let racine=new ftvItem(serveur.rootFolder);
-    for (let f of racine.children){
-      this.dossiers.push(f);
-    }
-
-    this._treeElement=document.getElementById("foldersTree");
-
-    gFolderTreeView.registerFolderTreeMode(this._treeElement.getAttribute("mode"),
-                                           this,
-                                           "Liste des dossiers");
-
-    gFolderTreeView.load(this._treeElement);
   }
 }
