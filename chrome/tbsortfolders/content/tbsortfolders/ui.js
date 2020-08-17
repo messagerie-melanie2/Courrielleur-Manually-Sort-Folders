@@ -388,6 +388,8 @@ function update_accounts_prefs() {
 
   let pref = Services.prefs.getCharPref("mail.accountmanager.accounts");
   pref.value = new_pref;
+  
+  Services.prefs.setCharPref("mail.accountmanager.accounts", new_pref);
 
   let default_account = document.getElementById("default_account").parentNode.value;
   if (default_account == "-1")
