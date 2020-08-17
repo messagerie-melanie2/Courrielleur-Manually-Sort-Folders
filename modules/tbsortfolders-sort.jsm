@@ -3,12 +3,14 @@ var Cc = Components.classes;
 var Ci = Components.interfaces;
 var Cu = Components.utils;
 
+
 /* This array doesn't change, it just contains the stubs. The third function is
  * not complete, it is instanciated with the right data (i.e. the custom sort
  * keys) for each account before being added to tbsf_prefs_functions. */
 var tbsf_sort_functions = [
   //Thunderbird's default (copied from the original folderPane.js)
   function(a, b) {
+
     let sortKey = a._folder.compareSortKeys(b._folder);
     if (sortKey)
       return sortKey;
@@ -17,7 +19,8 @@ var tbsf_sort_functions = [
 
   //Strictly alphabetical
   function(a, b) {
-    return a.text.toLowerCase() > b.text.toLowerCase();
+
+    return a.text.localeCompare(b.text, "fr");
   },
 
   //Custom
@@ -36,5 +39,11 @@ var tbsf_sort_functions = [
       return (a.text.toLowerCase() > b.text.toLowerCase())*2 - 1;
     else
       return data[k1] - data[k2];
+  },
+
+  // Courrielleur - fonction de tri personnalisée (remplace Custom)
+  function(a, b) {
+
+    return (a.ordre == b.ordre) ? 0 : (a.ordre > b.ordre ? 1 : -1);
   }
 ]
