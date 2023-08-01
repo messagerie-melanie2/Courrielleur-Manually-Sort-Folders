@@ -282,9 +282,9 @@ var g_other_accounts = null;
 function accounts_on_load() {
 
   let accounts = Services.prefs.getCharPref("mail.accountmanager.accounts").split(",");
-  let defaultaccount = Services.prefs.getCharPref("mail.accountmanager.defaultaccount");
+  /*let defaultaccount = Services.prefs.getCharPref("mail.accountmanager.defaultaccount");
   accounts = accounts.filter((x) => x != defaultaccount);
-  accounts = [defaultaccount].concat(accounts);
+  accounts = [defaultaccount].concat(accounts);*/
   let servers = accounts.map(function (a) { return Services.prefs.getCharPref("mail.account."+a+".server");});
   let types = servers.map(function (s) { return Services.prefs.getCharPref("mail.server."+s+".type");});
   let names = servers.map(function (s) {
